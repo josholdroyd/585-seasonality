@@ -8,14 +8,9 @@ import pandas as pd
 from finance_byu.regtables import Regtable
 import os
 from tabulate import tabulate
+from io import StringIO
 
 def load_french_csv(path, value_cols_rename):
-    """Load a Ken French CSV robustly.
-    Reads line-by-line to avoid pandas' strict column-count inference on the
-    preamble, finds the data block by scanning for YYYYMM rows, stops at the
-    first non-YYYYMM row, and handles French's missing-value codes.
-    """
-    from io import StringIO
 
     with open(path, 'r') as f:
         lines = f.readlines()
@@ -83,20 +78,18 @@ def build_factor_df(ff3_path='FF3.csv', mom_path='French_Momentum.csv'):
     fac.index.name = 'caldt'
     return fac
 
-
 def port_creation_and_statistics(df, lags, start, end):
-    # Per-lag quintile sorts.
     ew_results = []
     vw_results = []
     ew_spreads_by_lag = {}
     vw_spreads_by_lag = {}
 
+    start_date = dt.date(start[0], start[1], start[2])
+    end_date = dt.date(end[0], end[1], end[2])
+
     for lag in lags:
         stk = (
-            df.filter(
-                (pl.col('caldt') >= dt.date(start[0], start[1], start[2])) &
-                (pl.col('caldt') <= dt.date(end[0], end[1], end[2]))
-            )
+            df
             .with_columns(
                 me=(pl.when((pl.col('prc') * pl.col('shr')) > 1e-6)
                     .then((pl.col('prc') * pl.col('shr')) / 1000.0)
@@ -105,6 +98,10 @@ def port_creation_and_statistics(df, lags, start, end):
             .with_columns(
                 pl.col('ret').shift(lag).over('permno').alias('retlag'),
                 pl.col('prc', 'me').shift().over('permno').name.suffix('lag')
+            )            
+            .filter(
+                (pl.col('caldt') >= start_date) &
+                (pl.col('caldt') <= end_date)
             )
             .filter(
                 pl.col('shrcd').is_between(10, 11) &
@@ -161,12 +158,13 @@ def port_creation_and_statistics(df, lags, start, end):
     print("\nVW Table")
     print(vw_table)
 
-    # composite: equal-weighted mean across per-lag spread series
-    ew_composite = pd.concat(ew_spreads_by_lag.values(), axis=1).mean(axis=1).rename('spread').to_frame()
-    vw_composite = pd.concat(vw_spreads_by_lag.values(), axis=1).mean(axis=1).rename('spread').to_frame()
+    # strict composite: require all 20 lags to be present for a given month
+    ew_wide = pd.concat(ew_spreads_by_lag.values(), axis=1)
+    vw_wide = pd.concat(vw_spreads_by_lag.values(), axis=1)
+    ew_composite = ew_wide.dropna().mean(axis=1).rename('spread').to_frame()
+    vw_composite = vw_wide.dropna().mean(axis=1).rename('spread').to_frame()
 
     return ew_composite, vw_composite, ew_table, vw_table
-
 
 def recreate_table_1(df: pl.DataFrame, lags, nw_lags: int = 12):
 
@@ -291,18 +289,18 @@ def carhart(ew, vw, fac, label=''):
     vw.index = pd.to_datetime(vw.index).to_period('M').to_timestamp('M')
 
     ew = ew.join(fac, how='left')
-    ew['spread_no_rf'] = ew['spread'] - ew['rf']
-    n_ew = ew[['spread_no_rf', 'exmkt', 'smb', 'hml', 'umd']].dropna().shape[0]
+    n_ew = ew[['spread', 'exmkt', 'smb', 'hml', 'umd']].dropna().shape[0]
     print(f'{label} EW Regression (n={n_ew})')
-    reg_ew = [smf.ols('spread_no_rf ~ 1 + exmkt + smb + hml + umd', data=ew).fit()]
+    print(f'  Raw mean spread: {ew["spread"].mean():.4f}%, date range: {ew.index.min()} to {ew.index.max()}')
+    reg_ew = [smf.ols('spread ~ 1 + exmkt + smb + hml + umd', data=ew).fit()]
     r_ew = Regtable(reg_ew, sig='coeff').render()
     print(tabulate(r_ew, tablefmt='github', headers=r_ew.columns))
 
     vw = vw.join(fac, how='left')
-    vw['spread_no_rf'] = vw['spread'] - vw['rf']
-    n_vw = vw[['spread_no_rf', 'exmkt', 'smb', 'hml', 'umd']].dropna().shape[0]
+    n_vw = vw[['spread', 'exmkt', 'smb', 'hml', 'umd']].dropna().shape[0]
     print(f'\n{label} VW Regression (n={n_vw})')
-    reg_vw = [smf.ols('spread_no_rf ~ 1 + exmkt + smb + hml + umd', data=vw).fit()]
+    print(f'  Raw mean spread: {vw["spread"].mean():.4f}%, date range: {vw.index.min()} to {vw.index.max()}')
+    reg_vw = [smf.ols('spread ~ 1 + exmkt + smb + hml + umd', data=vw).fit()]
     r_vw = Regtable(reg_vw, sig='coeff').render()
     print(tabulate(r_vw, tablefmt='github', headers=r_vw.columns))
 
@@ -313,7 +311,6 @@ def main():
 
     # load factors once
     fac = build_factor_df('FF3.csv', 'French_Momentum.csv')
-    print(f"Factor data loaded: {fac.index.min()} to {fac.index.max()} ({len(fac)} months)")
 
     mstk = pl.scan_ipc('crsp_monthly.ftr', memory_map=False)
 
