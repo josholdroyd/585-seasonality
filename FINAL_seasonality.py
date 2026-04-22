@@ -7,6 +7,7 @@ import statsmodels.formula.api as smf
 import sf_quant.data as sfd
 import pandas as pd
 from finance_byu.regtables import Regtable
+from tabulate import tabulate
 
 def port_creation_and_statistics(df, lags, start, end):
     ew_results = []
@@ -89,7 +90,7 @@ def port_creation_and_statistics(df, lags, start, end):
 
         vw_results.append(vw_row)
 
-    # Convert to Polars tables
+    # Convert to Polars
     ew_table = pl.DataFrame(ew_results).sort("lag")
     vw_table = pl.DataFrame(vw_results).sort("lag")
 
@@ -243,7 +244,6 @@ def our_extension():
     return dstk
 
 def ff4(ew, vw):
-    from tabulate import tabulate
 
     fac = pd.read_csv('14-factors.csv')
     fac = fac.set_index('caldt')
@@ -312,6 +312,7 @@ def main():
     ff4(ew_d_in, vw_d_in)
 
     # -------- OUT-OF-SAMPLE ------------
+    
     print('OUT OF SAMPLE\n')
     # CREATE for each lag an EW and VW (p0 through p4 and spread)
     print('OUT OF SAMPLE REPLICATION')
@@ -328,7 +329,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# What specific results from table are we recreating with the portfolios?
-# Is it annual in Table 2?
-# Should we not drop the price for Table 1 to get a closer replication?
